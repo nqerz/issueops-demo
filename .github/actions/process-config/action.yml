@@ -1,0 +1,102 @@
+name: 'Process Configuration'
+description: 'Process and validate environment configuration'
+
+inputs:
+  issue-body:
+    description: 'The body content of the issue'
+    required: true
+  issue-number:
+    description: 'The issue number'
+    required: true
+  trigger-type:
+    description: 'What triggered this process (edit/reprocess)'
+    required: true
+  token:
+    description: 'GitHub token'
+    required: true
+
+outputs:
+  is-valid:
+    description: 'Whether the configuration is valid'
+    value: ${{ steps.validate.outputs.is-valid }}
+  config-hash:
+    description: 'Hash of the configuration'
+    value: ${{ steps.config-hash.outputs.hash }}
+  config-json:
+    description: 'JSON string of the configuration'
+    value: ${{ steps.config-hash.outputs.config_json }}
+  vars-content:
+    description: 'Content of the .vars file'
+    value: ${{ steps.process.outputs.vars_content }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Validate issue
+      id: validate
+      uses: ./.github/actions/validate-issue
+      with:
+        issue-body: ${{ inputs.issue-body }}
+        token: ${{ inputs.token }}
+
+    - name: Generate config hash
+      id: config-hash
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const crypto = require('crypto');
+          const config = {
+            test_id: '${{ steps.validate.outputs.test-id }}',
+            features: '${{ steps.validate.outputs.features }}',
+            docker_image: '${{ steps.validate.outputs.docker-image }}'
+          };
+          const configString = JSON.stringify(config);
+          const hash = crypto.createHash('sha256').update(configString).digest('hex');
+          core.setOutput('hash', hash);
+          core.setOutput('config_json', configString);
+
+    - name: Process valid configuration
+      id: process
+      if: steps.validate.outputs.is-valid == 'true'
+      shell: bash
+      run: |
+        # Create .vars file
+        cat > .vars << EOF
+        # Environment Configuration
+        # Generated from Issue #${{ inputs.issue-number }}
+        # Generated at: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+        # Triggered by: ${{ inputs.trigger-type }}
+
+        TEST_ID=${{ steps.validate.outputs.test-id }}
+        FEATURES=${{ steps.validate.outputs.features }}
+        DOCKER_IMAGE=${{ steps.validate.outputs.docker-image }}
+        EOF
+
+        echo "Generated .vars file content:"
+        echo "------------------------"
+        cat .vars
+        echo "------------------------"
+
+        # Save vars content to output
+        {
+          echo "vars_content<<EOF"
+          cat .vars
+          echo "EOF"
+        } >> $GITHUB_OUTPUT
+
+    - name: Create or update status comment
+      uses: peter-evans/create-or-update-comment@v4.0.0
+      with:
+        issue-number: ${{ inputs.issue-number }}
+        body: |
+          ## Configuration Summary (${{ inputs.trigger-type }})
+          | Configuration | Value |
+          | --- | --- |
+          | Test ID | ${{ steps.validate.outputs.test-id }} |
+          | Selected Features | ${{ steps.validate.outputs.features }} |
+          | Docker Image | ${{ steps.validate.outputs.docker-image }} |
+
+          Status: ${{ steps.validate.outputs.is-valid == 'true' && '✅ Valid' || '❌ Invalid' }}
+
+          <!-- CONFIG_HASH=${{ steps.config-hash.outputs.hash }} -->
+        edit-mode: replace

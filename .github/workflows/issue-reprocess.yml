@@ -1,0 +1,58 @@
+name: Issue Reprocess Workflow
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  reprocess:
+    runs-on: ubuntu-latest
+    if: |
+      contains(github.event.issue.labels.*.name, 'environment') &&
+      github.event.issue.state != 'closed' &&
+      contains(github.event.comment.body, '/reprocess')
+
+    steps:
+      - name: React to comment
+        uses: peter-evans/create-or-update-comment@v4.0.0
+        with:
+          comment-id: ${{ github.event.comment.id }}
+          reactions: '+1'
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Process configuration
+        id: process
+        uses: ./.github/actions/process-config
+        with:
+          issue-body: ${{ github.event.issue.body }}
+          issue-number: ${{ github.event.issue.number }}
+          trigger-type: 'reprocess'
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Add final comment and close issue
+        if: steps.process.outputs.is-valid == 'true'
+        uses: peter-evans/create-or-update-comment@v4.0.0
+        with:
+          issue-number: ${{ github.event.issue.number }}
+          body: |
+            ## ✅ Configuration Reprocessing Complete
+
+            Your environment configuration has been successfully reprocessed and applied:
+            ```shell
+            ${{ steps.process.outputs.vars-content }}
+            ```
+
+            This issue will be closed automatically as the configuration has been applied.
+            If you need to make changes, please create a new configuration issue.
+
+            <!-- CONFIG_PROCESSED -->
+          reactions: "+1"
+
+      - name: Close issue
+        if: steps.process.outputs.is-valid == 'true'
+        uses: peter-evans/close-issue@v3
+        with:
+          issue-number: ${{ github.event.issue.number }}
+          comment: false

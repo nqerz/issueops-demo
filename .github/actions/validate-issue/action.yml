@@ -1,0 +1,64 @@
+name: 'Validate Issue'
+description: 'Validates issue content and extracts configuration values'
+
+inputs:
+  issue-body:
+    description: 'The body content of the issue'
+    required: true
+  token:
+    description: 'GitHub token'
+    required: true
+
+outputs:
+  test-id:
+    description: 'Selected test ID'
+    value: ${{ steps.parse.outputs.test_id }}
+  features:
+    description: 'Selected features'
+    value: ${{ steps.parse.outputs.features }}
+  docker-image:
+    description: 'Docker image configuration'
+    value: ${{ steps.parse.outputs.docker_image }}
+  is-valid:
+    description: 'Whether the issue is valid'
+    value: ${{ steps.validate.outputs.is_valid }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Parse issue
+      id: parse
+      uses: stefanbuck/github-issue-parser@v3.2.1
+      with:
+        template-path: .github/ISSUE_TEMPLATE/environment-settings.yml
+        issue-body: ${{ inputs.issue-body }}
+
+    - name: Validate parsed content
+      id: validate
+      shell: bash
+      run: |
+        test_id="${{ steps.parse.outputs.test_id }}"
+        features="${{ steps.parse.outputs.select_features }}"
+        docker_image="${{ steps.parse.outputs.base_image_id }}"
+
+        is_valid=true
+
+        # Validate test_id
+        if [[ ! "$test_id" =~ ^[A-C]$ ]]; then
+          echo "::error::Invalid test ID. Must be A, B, or C"
+          is_valid=false
+        fi
+
+        # Validate features (at least one must be selected)
+        if [[ -z "$features" ]]; then
+          echo "::error::At least one feature must be selected"
+          is_valid=false
+        fi
+
+        # Validate docker image format if provided
+        if [[ -n "$docker_image" && ! "$docker_image" =~ ^[a-zA-Z0-9/-]+:[a-zA-Z0-9.-]+$ ]]; then
+          echo "::error::Invalid docker image format"
+          is_valid=false
+        fi
+
+        echo "is_valid=$is_valid" >> $GITHUB_OUTPUT

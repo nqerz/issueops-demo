@@ -1,0 +1,49 @@
+name: Environment Settings
+description: Template for configuring environment settings
+title: "[ENV]: "
+labels: ["environment", "configuration"]
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Demo for IssueOps
+
+  - type: dropdown
+    id: test_id
+    attributes:
+      label: Test ID
+      description: |
+        Select one test id
+      options:
+        - A
+        - B
+        - C
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: select_features
+    attributes:
+      label: Features
+      description: Features to be enabled in the project
+      options:
+        - label: feature1
+        - label: feature2
+    validations:
+      required: true
+
+  - type: input
+    id: base_image_id
+    attributes:
+      label: Docker Image
+      description: Input the docker image
+      placeholder: 'busybox:latest'
+    validations:
+      required: false
+
+  - type: markdown
+    attributes:
+      value: |
+        > [!NOTE]
+        > Demo only
