@@ -35,19 +35,24 @@ runs:
       uses: stefanbuck/github-issue-parser@v3.2.1
       with:
         template-path: .github/ISSUE_TEMPLATE/environment-settings.yml
-        issue-body: |
-          ${{ inputs.issue-body }}
+        issue-body: ${{ inputs.issue-body }}
 
-    # Validate issue format and values
     - name: Validate issue
       id: validate
       uses: actions/github-script@v7
       with:
         script: |
           const testId = '${{ steps.parse.outputs.issueparser_test_id }}';
-          const features = '${{ steps.parse.outputs.issueparser_select_features }}';
+          const features = '${{ steps.parse.outputs.issueparser_select_features }}'.split(',').map(f => f.trim());
           const dockerImage = '${{ steps.parse.outputs.issueparser_base_image_id }}';
           const issueTitle = '${{ inputs.issue-title }}';
+
+          console.log('Debug info:', {
+            testId,
+            features,
+            dockerImage,
+            issueTitle
+          });
 
           let isValid = true;
           let errors = [];
@@ -86,28 +91,20 @@ runs:
           }
 
           // Validate features
-          try {
-            const featuresList = JSON.parse(features || '[]');
-            if (!featuresList || featuresList.length === 0) {
-              isValid = false;
-              validationResults.features.valid = false;
-              validationResults.features.message = 'At least one feature must be selected';
-              errors.push(validationResults.features.message);
-            }
-            // Validate feature names
-            const validFeatures = ['feature1', 'feature2'];
-            const invalidFeatures = featuresList.filter(f => !validFeatures.includes(f));
+          const validFeatures = ['feature1', 'feature2'];
+          if (!features || features.length === 0) {
+            isValid = false;
+            validationResults.features.valid = false;
+            validationResults.features.message = 'At least one feature must be selected';
+            errors.push(validationResults.features.message);
+          } else {
+            const invalidFeatures = features.filter(f => !validFeatures.includes(f));
             if (invalidFeatures.length > 0) {
               isValid = false;
               validationResults.features.valid = false;
               validationResults.features.message = `Invalid features selected: ${invalidFeatures.join(', ')}`;
               errors.push(validationResults.features.message);
             }
-          } catch (e) {
-            isValid = false;
-            validationResults.features.valid = false;
-            validationResults.features.message = 'Invalid features format';
-            errors.push(validationResults.features.message);
           }
 
           // Validate docker image format if provided
