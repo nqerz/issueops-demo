@@ -64,23 +64,72 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const previousComment = `${{ steps.previous-config.outputs.comment-body }}`;
-            const hashMatch = previousComment.match(/<!-- CONFIG_HASH=([a-f0-9]+) -->/);
-            const previousHash = hashMatch ? hashMatch[1] : null;
-            const currentHash = '${{ steps.process.outputs.config-hash }}';
+            try {
+              // Check if previous comment exists
+              const hasComment = '${{ steps.previous-config.outputs.comment-id }}' !== '';
+              if (!hasComment) {
+                console.log('No previous configuration found, treating as new configuration');
+                core.setOutput('values_changed', 'true');
+                return;
+              }
 
-            const valuesChanged = !previousHash || previousHash !== currentHash;
-            console.log('Previous hash:', previousHash);
-            console.log('Current hash:', currentHash);
-            console.log('Values changed:', valuesChanged);
+              const previousComment = `${{ steps.previous-config.outputs.comment-body }}`;
+              if (!previousComment) {
+                console.log('Previous comment body is empty, treating as new configuration');
+                core.setOutput('values_changed', 'true');
+                return;
+              }
 
-            core.setOutput('values_changed', valuesChanged.toString());
+              // Extract hash using string operations
+              const hashStart = previousComment.indexOf('CONFIG_HASH=');
+              if (hashStart === -1) {
+                console.log('No hash found in previous comment, treating as new configuration');
+                core.setOutput('values_changed', 'true');
+                return;
+              }
+
+              const hashStartPos = hashStart + 12; // length of 'CONFIG_HASH='
+              const hashEnd = previousComment.indexOf(' -->', hashStartPos);
+              if (hashEnd === -1) {
+                console.log('Invalid hash format in previous comment, treating as new configuration');
+                core.setOutput('values_changed', 'true');
+                return;
+              }
+
+              const previousHash = previousComment.substring(hashStartPos, hashEnd);
+              const currentHash = '${{ steps.process.outputs.config-hash }}';
+
+              console.log('Previous hash:', previousHash);
+              console.log('Current hash:', currentHash);
+
+              if (!previousHash || !currentHash) {
+                console.log('Missing hash values, treating as changed');
+                core.setOutput('values_changed', 'true');
+                return;
+              }
+
+              const valuesChanged = previousHash !== currentHash;
+              console.log('Values changed:', valuesChanged);
+
+              core.setOutput('values_changed', valuesChanged.toString());
+            } catch (error) {
+              console.error('Error in check config changes:', error);
+              // Log detailed error information
+              console.log('Error details:', {
+                hasCommentId: '${{ steps.previous-config.outputs.comment-id }}' !== '',
+                commentBody: Boolean('${{ steps.previous-config.outputs.comment-body }}'),
+                currentHash: Boolean('${{ steps.process.outputs.config-hash }}')
+              });
+              // Treat any error as a change to ensure processing continues
+              core.setOutput('values_changed', 'true');
+            }
 
       - name: Add guidance comment
         if: |
           steps.check.outputs.has_env_label == 'true' &&
           github.event.action == 'edited' &&
-          steps.check-changes.outputs.values_changed == 'false'
+          steps.check-changes.outputs.values_changed == 'false' &&
+          steps.previous-config.outputs.comment-id != ''
         uses: peter-evans/create-or-update-comment@v4.0.0
         with:
           issue-number: ${{ github.event.issue.number }}
@@ -94,7 +143,7 @@ jobs:
 
             Current configuration:            ```json
             ${{ steps.process.outputs.config-json }}            ```
-          reactions: "eyes"
+          reactions: 'eyes'
 
       - name: Add final comment and close issue
         if: |
