@@ -64,11 +64,17 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const previousComment = '${{ steps.previous-config.outputs.comment-body }}';
-            const previousHash = previousComment.match(/<!-- CONFIG_HASH=(.*?) -->/)?.[1];
+            const previousComment = `${{ steps.previous-config.outputs.comment-body }}`;
+            const hashMatch = previousComment.match(/<!-- CONFIG_HASH=([a-f0-9]+) -->/);
+            const previousHash = hashMatch ? hashMatch[1] : null;
             const currentHash = '${{ steps.process.outputs.config-hash }}';
 
-            core.setOutput('values_changed', (!previousHash || previousHash !== currentHash).toString());
+            const valuesChanged = !previousHash || previousHash !== currentHash;
+            console.log('Previous hash:', previousHash);
+            console.log('Current hash:', currentHash);
+            console.log('Values changed:', valuesChanged);
+
+            core.setOutput('values_changed', valuesChanged.toString());
 
       - name: Add guidance comment
         if: |
