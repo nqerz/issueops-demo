@@ -1,31 +1,35 @@
 name: 'Validate Issue'
-description: 'Validates issue content and extracts configuration values'
+description: 'Validates issue content and format'
 
 inputs:
   issue-body:
     description: 'The body content of the issue'
+    required: true
+  issue-title:
+    description: 'The issue title'
     required: true
   token:
     description: 'GitHub token'
     required: true
 
 outputs:
-  test-id:
-    description: 'Selected test ID'
-    value: ${{ steps.parse.outputs.test_id }}
-  features:
-    description: 'Selected features'
-    value: ${{ steps.parse.outputs.features }}
-  docker-image:
-    description: 'Docker image configuration'
-    value: ${{ steps.parse.outputs.docker_image }}
   is-valid:
     description: 'Whether the issue is valid'
     value: ${{ steps.validate.outputs.is_valid }}
+  errors:
+    description: 'Error messages if validation failed'
+    value: ${{ steps.validate.outputs.errors }}
+  parsed-values:
+    description: 'JSON string of parsed values'
+    value: ${{ steps.validate.outputs.parsed_values }}
+  validation-results:
+    description: 'Detailed validation results'
+    value: ${{ steps.validate.outputs.validation_results }}
 
 runs:
   using: "composite"
   steps:
+    # Parse issue using template
     - name: Parse issue
       id: parse
       uses: stefanbuck/github-issue-parser@v3.2.1
@@ -33,32 +37,95 @@ runs:
         template-path: .github/ISSUE_TEMPLATE/environment-settings.yml
         issue-body: ${{ inputs.issue-body }}
 
-    - name: Validate parsed content
+    # Validate issue format and values
+    - name: Validate issue
       id: validate
-      shell: bash
-      run: |
-        test_id="${{ steps.parse.outputs.test_id }}"
-        features="${{ steps.parse.outputs.select_features }}"
-        docker_image="${{ steps.parse.outputs.base_image_id }}"
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const testId = '${{ steps.parse.outputs.test_id }}';
+          const features = '${{ steps.parse.outputs.select_features }}';
+          const dockerImage = '${{ steps.parse.outputs.base_image_id }}';
+          const issueTitle = '${{ inputs.issue-title }}';
 
-        is_valid=true
+          let isValid = true;
+          let errors = [];
+          const validationResults = {
+            title: { valid: true, message: '' },
+            testId: { valid: true, message: '' },
+            titleTestIdMatch: { valid: true, message: '' },
+            features: { valid: true, message: '' },
+            dockerImage: { valid: true, message: '' }
+          };
 
-        # Validate test_id
-        if [[ ! "$test_id" =~ ^[A-C]$ ]]; then
-          echo "::error::Invalid test ID. Must be A, B, or C"
-          is_valid=false
-        fi
+          // Validate title format
+          const titlePattern = /^\[ENV SETTINGS\]:\s*[A-C]$/;
+          if (!titlePattern.test(issueTitle)) {
+            isValid = false;
+            validationResults.title.valid = false;
+            validationResults.title.message = 'Invalid title format. Expected: [ENV SETTINGS]: {A|B|C}';
+            errors.push(validationResults.title.message);
+          }
 
-        # Validate features (at least one must be selected)
-        if [[ -z "$features" ]]; then
-          echo "::error::At least one feature must be selected"
-          is_valid=false
-        fi
+          // Validate test_id
+          if (!testId || !['A', 'B', 'C'].includes(testId)) {
+            isValid = false;
+            validationResults.testId.valid = false;
+            validationResults.testId.message = 'Invalid Test ID. Must be A, B, or C';
+            errors.push(validationResults.testId.message);
+          }
 
-        # Validate docker image format if provided
-        if [[ -n "$docker_image" && ! "$docker_image" =~ ^[a-zA-Z0-9/-]+:[a-zA-Z0-9.-]+$ ]]; then
-          echo "::error::Invalid docker image format"
-          is_valid=false
-        fi
+          // Validate test_id matches title
+          const titleTestId = issueTitle.match(/[A-C]$/)?.[0];
+          if (titleTestId && testId && titleTestId !== testId) {
+            isValid = false;
+            validationResults.titleTestIdMatch.valid = false;
+            validationResults.titleTestIdMatch.message = 'Test ID in title does not match selected Test ID';
+            errors.push(validationResults.titleTestIdMatch.message);
+          }
 
-        echo "is_valid=$is_valid" >> $GITHUB_OUTPUT
+          // Validate features
+          try {
+            const featuresList = JSON.parse(features || '[]');
+            if (!featuresList || featuresList.length === 0) {
+              isValid = false;
+              validationResults.features.valid = false;
+              validationResults.features.message = 'At least one feature must be selected';
+              errors.push(validationResults.features.message);
+            }
+            // Validate feature names
+            const validFeatures = ['feature1', 'feature2'];
+            const invalidFeatures = featuresList.filter(f => !validFeatures.includes(f));
+            if (invalidFeatures.length > 0) {
+              isValid = false;
+              validationResults.features.valid = false;
+              validationResults.features.message = `Invalid features selected: ${invalidFeatures.join(', ')}`;
+              errors.push(validationResults.features.message);
+            }
+          } catch (e) {
+            isValid = false;
+            validationResults.features.valid = false;
+            validationResults.features.message = 'Invalid features format';
+            errors.push(validationResults.features.message);
+          }
+
+          // Validate docker image format if provided
+          if (dockerImage && !/^[a-zA-Z0-9/-]+:[a-zA-Z0-9.-]+$/.test(dockerImage)) {
+            isValid = false;
+            validationResults.dockerImage.valid = false;
+            validationResults.dockerImage.message = 'Invalid docker image format. Expected format: name:tag';
+            errors.push(validationResults.dockerImage.message);
+          }
+
+          // Set outputs
+          core.setOutput('is_valid', isValid.toString());
+          core.setOutput('errors', errors.join(', '));
+          core.setOutput('validation_results', JSON.stringify(validationResults));
+
+          // Output parsed values
+          const parsedValues = {
+            test_id: testId,
+            features: features,
+            docker_image: dockerImage || 'busybox:latest'
+          };
+          core.setOutput('parsed_values', JSON.stringify(parsedValues));

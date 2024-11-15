@@ -1,102 +1,150 @@
-name: 'Process Configuration'
-description: 'Process and validate environment configuration'
+name: "Process Configuration"
+description: "Process and validate environment configuration"
 
 inputs:
   issue-body:
-    description: 'The body content of the issue'
+    description: "The body content of the issue"
     required: true
   issue-number:
-    description: 'The issue number'
+    description: "The issue number"
+    required: true
+  issue-title:
+    description: "The issue title"
     required: true
   trigger-type:
-    description: 'What triggered this process (edit/reprocess)'
+    description: "What triggered this process (edit/reprocess)"
     required: true
   token:
-    description: 'GitHub token'
+    description: "GitHub token"
     required: true
 
 outputs:
   is-valid:
-    description: 'Whether the configuration is valid'
-    value: ${{ steps.validate.outputs.is-valid }}
+    description: "Whether the configuration is valid"
+    value: ${{ steps.revalidate.outputs.is-valid || steps.validate.outputs.is-valid }}
   config-hash:
-    description: 'Hash of the configuration'
-    value: ${{ steps.config-hash.outputs.hash }}
+    description: "Hash of the configuration"
+    value: ${{ steps.generate-hash.outputs.hash }}
   config-json:
-    description: 'JSON string of the configuration'
-    value: ${{ steps.config-hash.outputs.config_json }}
+    description: "JSON string of the configuration"
+    value: ${{ steps.generate-hash.outputs.config_json }}
   vars-content:
-    description: 'Content of the .vars file'
-    value: ${{ steps.process.outputs.vars_content }}
+    description: "Content of the .vars file"
+    value: ${{ steps.create-vars.outputs.content }}
 
 runs:
   using: "composite"
   steps:
+    # Initial issue validation
     - name: Validate issue
       id: validate
       uses: ./.github/actions/validate-issue
       with:
         issue-body: ${{ inputs.issue-body }}
+        issue-title: ${{ inputs.issue-title }}
         token: ${{ inputs.token }}
 
-    - name: Generate config hash
-      id: config-hash
+    # Handle title format issues
+    - name: Fix issue title
+      id: fix-title
+      if: |
+        steps.validate.outputs.is-valid != 'true' &&
+        fromJSON(steps.validate.outputs.validation-results).title.valid == 'false'
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ inputs.token }}
+        script: |
+          const parsedValues = JSON.parse('${{ steps.validate.outputs.parsed-values }}');
+          const newTitle = `[ENV SETTINGS]: ${parsedValues.test_id}`;
+
+          // Update issue title
+          await github.rest.issues.update({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: ${{ inputs.issue-number }},
+            title: newTitle
+          });
+
+          // Add notification comment
+          await github.rest.issues.createComment({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: ${{ inputs.issue-number }},
+            body: `@${context.payload.issue.user.login} I've updated the issue title to match the required format: \`${newTitle}\``
+          });
+
+          core.setOutput('new_title', newTitle);
+
+    # Revalidate if title was modified
+    - name: Revalidate after title fix
+      id: revalidate
+      if: steps.fix-title.outcome == 'success'
+      uses: ./.github/actions/validate-issue
+      with:
+        issue-body: ${{ inputs.issue-body }}
+        issue-title: ${{ steps.fix-title.outputs.new_title }}
+        token: ${{ inputs.token }}
+
+    # Generate configuration hash
+    - name: Generate hash
+      id: generate-hash
+      if: |
+        steps.validate.outputs.is-valid == 'true' ||
+        steps.revalidate.outputs.is-valid == 'true'
       uses: actions/github-script@v7
       with:
         script: |
+          const parsedValues = JSON.parse('${{ steps.revalidate.outcome == ''success'' && steps.revalidate.outputs.parsed-values || steps.validate.outputs.parsed-values }}');
+          const configString = JSON.stringify(parsedValues);
+
           const crypto = require('crypto');
-          const config = {
-            test_id: '${{ steps.validate.outputs.test-id }}',
-            features: '${{ steps.validate.outputs.features }}',
-            docker_image: '${{ steps.validate.outputs.docker-image }}'
-          };
-          const configString = JSON.stringify(config);
           const hash = crypto.createHash('sha256').update(configString).digest('hex');
+
           core.setOutput('hash', hash);
           core.setOutput('config_json', configString);
 
-    - name: Process valid configuration
-      id: process
-      if: steps.validate.outputs.is-valid == 'true'
+    # Create .vars file
+    - name: Create vars file
+      id: create-vars
+      if: |
+        steps.validate.outputs.is-valid == 'true' ||
+        steps.revalidate.outputs.is-valid == 'true'
       shell: bash
       run: |
-        # Create .vars file
-        cat > .vars << EOF
+        parsed_values='${{ steps.revalidate.outcome == ''success'' && steps.revalidate.outputs.parsed-values || steps.validate.outputs.parsed-values }}'
+        test_id=$(echo "$parsed_values" | jq -r '.test_id')
+        features=$(echo "$parsed_values" | jq -r '.features')
+        docker_image=$(echo "$parsed_values" | jq -r '.docker_image')
+
+        content=$(cat << EOF
         # Environment Configuration
         # Generated from Issue #${{ inputs.issue-number }}
         # Generated at: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
         # Triggered by: ${{ inputs.trigger-type }}
 
-        TEST_ID=${{ steps.validate.outputs.test-id }}
-        FEATURES=${{ steps.validate.outputs.features }}
-        DOCKER_IMAGE=${{ steps.validate.outputs.docker-image }}
+        TEST_ID=$test_id
+        FEATURES=$features
+        DOCKER_IMAGE=$docker_image
         EOF
+        )
+        echo "$content" > .vars
+        echo "content<<EOF" >> $GITHUB_OUTPUT
+        echo "$content" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
 
-        echo "Generated .vars file content:"
-        echo "------------------------"
-        cat .vars
-        echo "------------------------"
-
-        # Save vars content to output
-        {
-          echo "vars_content<<EOF"
-          cat .vars
-          echo "EOF"
-        } >> $GITHUB_OUTPUT
-
-    - name: Create or update status comment
+    # Update status comment
+    - name: Update status
       uses: peter-evans/create-or-update-comment@v4.0.0
       with:
         issue-number: ${{ inputs.issue-number }}
         body: |
           ## Configuration Summary (${{ inputs.trigger-type }})
-          | Configuration | Value |
-          | --- | --- |
-          | Test ID | ${{ steps.validate.outputs.test-id }} |
-          | Selected Features | ${{ steps.validate.outputs.features }} |
-          | Docker Image | ${{ steps.validate.outputs.docker-image }} |
+          ```json
+          ${{ steps.revalidate.outcome == 'success' && steps.revalidate.outputs.parsed-values || steps.validate.outputs.parsed-values }}
+          ```
 
-          Status: ${{ steps.validate.outputs.is-valid == 'true' && '✅ Valid' || '❌ Invalid' }}
+          Status: ${{ (steps.revalidate.outcome == 'success' && steps.revalidate.outputs.is-valid == 'true') || steps.validate.outputs.is-valid == 'true' && '✅ Valid' || '❌ Invalid' }}
+          ${{ steps.revalidate.outcome == 'success' && steps.revalidate.outputs.is-valid != 'true' && format('Errors: {0}', steps.revalidate.outputs.errors) || steps.validate.outputs.is-valid != 'true' && format('Errors: {0}', steps.validate.outputs.errors) || '' }}
 
-          <!-- CONFIG_HASH=${{ steps.config-hash.outputs.hash }} -->
+          <!-- CONFIG_HASH=${{ steps.generate-hash.outputs.hash }} -->
         edit-mode: replace

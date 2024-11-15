@@ -1,6 +1,6 @@
 name: Environment Settings
 description: Template for configuring environment settings
-title: "[ENV]: "
+title: "[ENV SETTINGS]: <<TEST_ID>>"
 labels: ["environment", "configuration"]
 
 body:
@@ -38,7 +38,7 @@ body:
     attributes:
       label: Docker Image
       description: Input the docker image
-      placeholder: 'busybox:latest'
+      placeholder: "busybox:latest"
     validations:
       required: false
 

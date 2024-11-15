@@ -17,7 +17,7 @@ jobs:
         uses: peter-evans/create-or-update-comment@v4.0.0
         with:
           comment-id: ${{ github.event.comment.id }}
-          reactions: '+1'
+          reactions: "+1"
 
       - name: Checkout code
         uses: actions/checkout@v4
@@ -27,8 +27,9 @@ jobs:
         uses: ./.github/actions/process-config
         with:
           issue-body: ${{ github.event.issue.body }}
+          issue-title: ${{ github.event.issue.title }}
           issue-number: ${{ github.event.issue.number }}
-          trigger-type: 'reprocess'
+          trigger-type: "reprocess"
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Add final comment and close issue
