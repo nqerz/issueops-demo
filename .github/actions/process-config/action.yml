@@ -21,7 +21,7 @@ inputs:
 outputs:
   is-valid:
     description: "Whether the configuration is valid"
-    value: ${{ steps.revalidate.outputs.is-valid || steps.validate.outputs.is-valid }}
+    value: ${{ steps.validate.outputs.is-valid }}
   config-hash:
     description: "Hash of the configuration"
     value: ${{ steps.generate-hash.outputs.hash }}
@@ -44,57 +44,31 @@ runs:
         issue-title: ${{ inputs.issue-title }}
         token: ${{ inputs.token }}
 
-    # Handle title format issues
-    - name: Fix issue title
-      id: fix-title
-      if: |
-        steps.validate.outputs.is-valid != 'true' &&
-        fromJSON(steps.validate.outputs.validation-results).title.valid == 'false'
-      uses: actions/github-script@v7
+    # Notify validation failures
+    - name: Notify validation issues
+      if: steps.validate.outputs.is-valid != 'true'
+      uses: peter-evans/create-or-update-comment@v4.0.0
       with:
-        github-token: ${{ inputs.token }}
-        script: |
-          const parsedValues = JSON.parse('${{ steps.validate.outputs.parsed-values }}');
-          const newTitle = `[ENV SETTINGS]: ${parsedValues.test_id}`;
+        issue-number: ${{ inputs.issue-number }}
+        body: |
+          @${{ github.event.issue.user.login }} There are validation issues with your configuration:
 
-          // Update issue title
-          await github.rest.issues.update({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            issue_number: ${{ inputs.issue-number }},
-            title: newTitle
-          });
+          ## Validation Results
+          ```json
+          ${{ steps.validate.outputs.validation-results }}
+          ```
 
-          // Add notification comment
-          await github.rest.issues.createComment({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            issue_number: ${{ inputs.issue-number }},
-            body: `@${context.payload.issue.user.login} I've updated the issue title to match the required format: \`${newTitle}\``
-          });
-
-          core.setOutput('new_title', newTitle);
-
-    # Revalidate if title was modified
-    - name: Revalidate after title fix
-      id: revalidate
-      if: steps.fix-title.outcome == 'success'
-      uses: ./.github/actions/validate-issue
-      with:
-        issue-body: ${{ inputs.issue-body }}
-        issue-title: ${{ steps.fix-title.outputs.new_title }}
-        token: ${{ inputs.token }}
+          Please fix these issues and try again.
+        reactions: "eyes"
 
     # Generate configuration hash
     - name: Generate hash
       id: generate-hash
-      if: |
-        steps.validate.outputs.is-valid == 'true' ||
-        steps.revalidate.outputs.is-valid == 'true'
+      if: steps.validate.outputs.is-valid == 'true'
       uses: actions/github-script@v7
       with:
         script: |
-          const parsedValues = JSON.parse('${{ steps.revalidate.outcome == ''success'' && steps.revalidate.outputs.parsed-values || steps.validate.outputs.parsed-values }}');
+          const parsedValues = JSON.parse('${{ steps.validate.outputs.parsed-values }}');
           const configString = JSON.stringify(parsedValues);
 
           const crypto = require('crypto');
@@ -106,12 +80,10 @@ runs:
     # Create .vars file
     - name: Create vars file
       id: create-vars
-      if: |
-        steps.validate.outputs.is-valid == 'true' ||
-        steps.revalidate.outputs.is-valid == 'true'
+      if: steps.validate.outputs.is-valid == 'true'
       shell: bash
       run: |
-        parsed_values='${{ steps.revalidate.outcome == ''success'' && steps.revalidate.outputs.parsed-values || steps.validate.outputs.parsed-values }}'
+        parsed_values='${{ steps.validate.outputs.parsed-values }}'
         test_id=$(echo "$parsed_values" | jq -r '.test_id')
         features=$(echo "$parsed_values" | jq -r '.features')
         docker_image=$(echo "$parsed_values" | jq -r '.docker_image')
@@ -140,11 +112,11 @@ runs:
         body: |
           ## Configuration Summary (${{ inputs.trigger-type }})
           ```json
-          ${{ steps.revalidate.outcome == 'success' && steps.revalidate.outputs.parsed-values || steps.validate.outputs.parsed-values }}
+          ${{ steps.validate.outputs.parsed-values }}
           ```
 
-          Status: ${{ (steps.revalidate.outcome == 'success' && steps.revalidate.outputs.is-valid == 'true') || steps.validate.outputs.is-valid == 'true' && '✅ Valid' || '❌ Invalid' }}
-          ${{ steps.revalidate.outcome == 'success' && steps.revalidate.outputs.is-valid != 'true' && format('Errors: {0}', steps.revalidate.outputs.errors) || steps.validate.outputs.is-valid != 'true' && format('Errors: {0}', steps.validate.outputs.errors) || '' }}
+          Status: ${{ steps.validate.outputs.is-valid == 'true' && '✅ Valid' || '❌ Invalid' }}
+          ${{ steps.validate.outputs.is-valid != 'true' && format('Errors: {0}', steps.validate.outputs.errors) || '' }}
 
           <!-- CONFIG_HASH=${{ steps.generate-hash.outputs.hash }} -->
         edit-mode: replace
