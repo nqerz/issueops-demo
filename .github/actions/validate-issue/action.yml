@@ -1,29 +1,29 @@
-name: 'Validate Issue'
-description: 'Validates issue content and format'
+name: "Validate Issue"
+description: "Validates issue content and format"
 
 inputs:
   issue-body:
-    description: 'The body content of the issue'
+    description: "The body content of the issue"
     required: true
   issue-title:
-    description: 'The issue title'
+    description: "The issue title"
     required: true
   token:
-    description: 'GitHub token'
+    description: "GitHub token"
     required: true
 
 outputs:
   is-valid:
-    description: 'Whether the issue is valid'
+    description: "Whether the issue is valid"
     value: ${{ steps.validate.outputs.is_valid }}
   errors:
-    description: 'Error messages if validation failed'
+    description: "Error messages if validation failed"
     value: ${{ steps.validate.outputs.errors }}
   parsed-values:
-    description: 'JSON string of parsed values'
+    description: "JSON string of parsed values"
     value: ${{ steps.validate.outputs.parsed_values }}
   validation-results:
-    description: 'Detailed validation results'
+    description: "Detailed validation results"
     value: ${{ steps.validate.outputs.validation_results }}
 
 runs:
