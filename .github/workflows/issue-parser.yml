@@ -7,26 +7,30 @@ on:
 jobs:
   parse-issue:
     runs-on: ubuntu-latest
-    if: |
-      contains(github.event.issue.labels.*.name, 'environment') &&
-      github.event.issue.state != 'closed'
+    if: ${{ !contains(github.event.issue.state, 'closed') }}
 
     steps:
+      - name: Debug Info
+        run: |
+          echo "Event name: ${{ github.event_name }}"
+          echo "Event action: ${{ github.event.action }}"
+          echo "Issue labels: ${{ toJSON(github.event.issue.labels) }}"
+          echo "Issue state: ${{ github.event.issue.state }}"
+
+      - name: Check Conditions
+        id: check
+        run: |
+          HAS_ENV_LABEL=$(echo '${{ toJSON(github.event.issue.labels) }}' | jq 'any(.name == "environment")')
+          echo "Has environment label: $HAS_ENV_LABEL"
+          echo "has_env_label=$HAS_ENV_LABEL" >> $GITHUB_OUTPUT
+          echo "issue_state=${{ github.event.issue.state }}" >> $GITHUB_OUTPUT
+
       - name: Checkout code
+        if: steps.check.outputs.has_env_label == 'true'
         uses: actions/checkout@v4
 
-      # 检查配置是否变更（仅编辑时）
-      - name: Get previous config
-        if: github.event.action == 'edited'
-        uses: peter-evans/find-comment@v3.1.0
-        id: previous-config
-        with:
-          issue-number: ${{ github.event.issue.number }}
-          comment-author: 'github-actions[bot]'
-          body-includes: '<!-- CONFIG_HASH='
-
-      # 处理配置
       - name: Process configuration
+        if: steps.check.outputs.has_env_label == 'true'
         id: process
         uses: ./.github/actions/process-config
         with:
@@ -36,10 +40,22 @@ jobs:
           trigger-type: ${{ github.event.action }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      # 检查配置是否变更
+      - name: Get previous config
+        if: |
+          steps.check.outputs.has_env_label == 'true' &&
+          github.event.action == 'edited'
+        uses: peter-evans/find-comment@v3.1.0
+        id: previous-config
+        with:
+          issue-number: ${{ github.event.issue.number }}
+          comment-author: "github-actions[bot]"
+          body-includes: "<!-- CONFIG_HASH="
+
       - name: Check config changes
+        if: |
+          steps.check.outputs.has_env_label == 'true' &&
+          github.event.action == 'edited'
         id: check-changes
-        if: github.event.action == 'edited'
         uses: actions/github-script@v7
         with:
           script: |
@@ -49,9 +65,9 @@ jobs:
 
             core.setOutput('values_changed', (!previousHash || previousHash !== currentHash).toString());
 
-      # 添加指导信息（如果配置未变更）
       - name: Add guidance comment
         if: |
+          steps.check.outputs.has_env_label == 'true' &&
           github.event.action == 'edited' &&
           steps.check-changes.outputs.values_changed == 'false'
         uses: peter-evans/create-or-update-comment@v4.0.0
@@ -61,21 +77,17 @@ jobs:
             ## ℹ️ No Changes Detected
 
             No changes were detected in your configuration values. To retrigger the processing:
-            1. Add a comment with the following content:
-            ```
-            /reprocess
-            ```
+            1. Add a comment with the following content:            ```
+            /reprocess            ```
             2. Or make changes to your configuration values and save.
 
-            Current configuration:
-            ```json
-            ${{ steps.process.outputs.config-json }}
-            ```
-          reactions: 'eyes'
+            Current configuration:            ```json
+            ${{ steps.process.outputs.config-json }}            ```
+          reactions: "eyes"
 
-      # 添加最终评论并关闭 issue
       - name: Add final comment and close issue
         if: |
+          steps.check.outputs.has_env_label == 'true' &&
           steps.process.outputs.is-valid == 'true' &&
           (github.event.action != 'edited' || steps.check-changes.outputs.values_changed == 'true')
         uses: peter-evans/create-or-update-comment@v4.0.0
@@ -84,10 +96,8 @@ jobs:
           body: |
             ## ✅ Configuration Processing Complete
 
-            Your environment configuration has been successfully processed and applied:
-            ```shell
-            ${{ steps.process.outputs.vars-content }}
-            ```
+            Your environment configuration has been successfully processed and applied:            ```shell
+            ${{ steps.process.outputs.vars-content }}            ```
 
             This issue will be closed automatically as the configuration has been applied.
             If you need to make changes, please create a new configuration issue.
@@ -97,6 +107,7 @@ jobs:
 
       - name: Close issue
         if: |
+          steps.check.outputs.has_env_label == 'true' &&
           steps.process.outputs.is-valid == 'true' &&
           (github.event.action != 'edited' || steps.check-changes.outputs.values_changed == 'true')
         uses: peter-evans/close-issue@v3
