@@ -143,7 +143,7 @@ jobs:
 
             Current configuration:            ```json
             ${{ steps.process.outputs.config-json }}            ```
-          reactions: 'eyes'
+          reactions: "eyes"
 
       - name: Add final comment and close issue
         if: |
@@ -156,7 +156,7 @@ jobs:
           body: |
             ## ✅ Configuration Processing Complete
 
-            Your environment configuration has been successfully processed and applied:            ```shell
+            Your environment configuration has been successfully processed and applied:            ```ini
             ${{ steps.process.outputs.vars-content }}            ```
 
             This issue will be closed automatically as the configuration has been applied.
@@ -173,4 +173,5 @@ jobs:
         uses: peter-evans/close-issue@v3
         with:
           issue-number: ${{ github.event.issue.number }}
-          comment: false
+          comment: |
+            Issue solved and close.
